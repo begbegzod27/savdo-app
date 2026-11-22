@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Savdo agent</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--txt:#e8eaf0;--mut:#8a90a2;--ok:#2ecc71;--bad:#e74c3c;--wait:#f1c40f;--acc:#3b82f6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Roboto,sans-serif;padding:12px 12px 80px}
+  h1{font-size:18px;margin:4px 0 10px}
+  .tabs{display:flex;gap:8px;margin-bottom:12px}
+  .tab{flex:1;padding:10px;border-radius:10px;background:var(--card);color:var(--mut);text-align:center;border:0;font-size:14px}
+  .tab.on{background:var(--acc);color:#fff}
+  .card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:10px}
+  .row{display:flex;justify-content:space-between;align-items:center;margin:4px 0;font-size:14px}
+  .mut{color:var(--mut)}
+  .sym{font-size:16px;font-weight:600}
+  .badge{padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;color:#000}
+  .BUY{background:var(--ok)} .WAIT{background:var(--wait)}
+  .reason{font-size:13px;color:var(--mut);margin-top:6px}
+  button.main{width:100%;padding:12px;border:0;border-radius:10px;background:var(--acc);color:#fff;font-size:15px;margin-bottom:10px}
+  label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+  input,select{width:100%;padding:11px;border-radius:10px;border:1px solid #2a2e3d;background:#11141c;color:var(--txt);font-size:15px}
+  .res{font-size:15px;line-height:1.7}
+  .big{font-size:20px;font-weight:700}
+  .warn{font-size:12px;color:var(--mut);text-align:center;margin-top:14px}
+</style>
+</head>
+<body>
+<h1>📈 Savdo agent</h1>
+<div class="tabs">
+  <button class="tab on" id="t1" onclick="showTab(1)">Signallar</button>
+  <button class="tab" id="t2" onclick="showTab(2)">Risk hisoblagich</button>
+</div>
+
+<div id="p1">
+  <div class="card" id="fg">Kayfiyat yuklanmoqda...</div>
+  <button class="main" onclick="loadAll()">🔄 Yangilash</button>
+  <div id="list"></div>
+</div>
+
+<div id="p2" style="display:none">
+  <div class="card">
+    <label>Koin</label>
+    <select id="csym" onchange="calc()"></select>
+    <label>Demo balans ($)</label>
+    <input id="cbal" type="number" inputmode="decimal" value="1000" oninput="calc()">
+    <label>Har savdoda xavf (%)</label>
+    <input id="crisk" type="number" inputmode="decimal" value="1" step="0.1" oninput="calc()">
+  </div>
+  <div class="card res" id="cres">Avval Signallar bo'limida ma'lumot yuklanishini kuting.</div>
+</div>
+
+<div class="warn">Bu faqat tahlil vositasi. Moliyaviy maslahat emas. Foyda kafolatlanmaydi.</div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const API = "https://data-api.binance.vision/api/v3";
+const SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"];
+const RR = 2.0;
+let DATA = {};
+let FG = null;
+
+function ema(v,n){const k=2/(n+1);let e=v[0];for(let i=1;i<v.length;i++)e=v[i]*k+e*(1-k);return e;}
+function rsi(c,n=14){let g=0,l=0;for(let i=c.length-n;i<c.length;i++){const d=c[i]-c[i-1];if(d>0)g+=d;else l-=d;}if(l===0)return 100;return 100-100/(1+(g/n)/(l/n));}
+function atr(h,l,c,n=14){let s=0;for(let i=c.length-n;i<c.length;i++){s+=Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1]));}return s/n;}
+function fmt(x){return x>=100?x.toLocaleString("en-US",{maximumFractionDigits:2}):x.toLocaleString("en-US",{maximumFractionDigits:4});}
+
+async function analyze(sym){
+  const r = await fetch(API + "/klines?symbol=" + sym + "&interval=1h&limit=120");
+  const d = await r.json();
+  if (!Array.isArray(d)) throw new Error("Birja javobi xato");
+  const h = d.map(k=>+k[2]), l = d.map(k=>+k[3]), c = d.map(k=>+k[4]);
+  const price = c[c.length-1];
+  const e20 = ema(c,20), e50 = ema(c,50);
+  const R = rsi(c), A = atr(h,l,c);
+  const strength = Math.abs(e20-e50)/price*100;
+  let mode, signal, reason;
+  if (strength > 0.5) {
+    mode = "TREND";
+    if (e20 > e50 && R > 45 && R < 70) { signal="BUY"; reason="trend yuqoriga (EMA20>EMA50), RSI sog'lom"; }
+    else { signal="WAIT"; reason="trend bor, lekin kirish sharti yo'q"; }
+  } else {
+    mode = "YON BOZOR";
+    if (R < 30) { signal="BUY"; reason="RSI past (<30), qaytish ehtimoli"; }
+    else { signal="WAIT"; reason="yon bozor, RSI kirish zonasida emas"; }
+  }
+  if (signal === "BUY" && FG !== null && FG < 20) {
+    signal="WAIT"; reason="bozor kayfiyati juda qo'rqinchli (" + FG + "), xavfli";
+  }
+  return {sym, price, rsi:R, atr:A, mode, signal, reason};
+}
+
+async function loadFG(){
+  const box = document.getElementById("fg");
+  try {
+    const r = await fetch("https://api.alternative.me/fng/?limit=1");
+    const d = (await r.json()).data[0];
+    FG = parseInt(d.value);
+    box.innerHTML = '<div class="row"><span>Bozor kayfiyati (Fear &amp; Greed)</span><span class="big">' + FG + '</span></div><div class="mut">' + d.value_classification + '</div>';
+  } catch(e) {
+    FG = null;
+    box.innerHTML = '<span class="mut">Kayfiyat ma\'lumoti olinmadi</span>';
+  }
+}
+
+async function loadAll(){
+  const list = document.getElementById("list");
+  list.innerHTML = '<div class="card mut">Tahlil qilinmoqda...</div>';
+  await loadFG();
+  let html = "";
+  for (const s of SYMS) {
+    try {
+      const a = await analyze(s);
+      DATA[s] = a;
+      html += '<div class="card"><div class="row"><span class="sym">' + s.replace("USDT","") + '/USDT</span><span class="badge ' + a.signal + '">' + a.signal + '</span></div>'
+        + '<div class="row"><span class="mut">Narx</span><span>' + fmt(a.price) + ' $</span></div>'
+        + '<div class="row"><span class="mut">Rejim</span><span>' + a.mode + '</span></div>'
+        + '<div class="row"><span class="mut">RSI</span><span>' + a.rsi.toFixed(1) + '</span></div>'
+        + '<div class="reason">' + a.reason + '</div></div>';
+    } catch(e) {
+      html += '<div class="card"><span class="sym">' + s + '</span><div class="reason">Xato: ' + e.message + '</div></div>';
+    }
+  }
+  list.innerHTML = html;
+  calc();
+}
+
+function calc(){
+  const sym = document.getElementById("csym").value;
+  const a = DATA[sym];
+  const out = document.getElementById("cres");
+  if (!a) { out.textContent = "Avval Signallar bo'limida ma'lumot yuklanishini kuting."; return; }
+  const bal = parseFloat(document.getElementById("cbal").value) || 0;
+  const risk = parseFloat(document.getElementById("crisk").value) || 0;
+  const stop = a.price - 1.5*a.atr;
+  const riskAmt = bal*risk/100;
+  let qty = riskAmt/(a.price-stop);
+  const maxCost = bal*0.30;
+  let capped = false;
+  if (qty*a.price > maxCost) { qty = maxCost/a.price; capped = true; }
+  const tp = a.price + RR*(a.price-stop);
+  const realRisk = qty*(a.price-stop);
+  out.innerHTML = '<div class="row"><span class="mut">Kirish narxi</span><b>' + fmt(a.price) + ' $</b></div>'
+    + '<div class="row"><span class="mut">Stop-loss</span><b style="color:var(--bad)">' + fmt(stop) + ' $</b></div>'
+    + '<div class="row"><span class="mut">Maqsad (1:' + RR + ')</span><b style="color:var(--ok)">' + fmt(tp) + ' $</b></div>'
+    + '<div class="row"><span class="mut">Hajm</span><b>' + qty.toFixed(5) + ' ' + sym.replace("USDT","") + '</b></div>'
+    + '<div class="row"><span class="mut">Pozitsiya summasi</span><b>' + (qty*a.price).toFixed(2) + ' $</b></div>'
+    + '<div class="row"><span class="mut">Maksimal zarar</span><b>' + realRisk.toFixed(2) + ' $</b></div>'
+    + (capped ? '<div class="reason">Pozitsiya kapitalning 30% bilan cheklandi.</div>' : '');
+}
+
+function showTab(n){
+  document.getElementById("p1").style.display = n===1 ? "" : "none";
+  document.getElementById("p2").style.display = n===2 ? "" : "none";
+  document.getElementById("t1").className = "tab" + (n===1 ? " on" : "");
+  document.getElementById("t2").className = "tab" + (n===2 ? " on" : "");
+  if (n===2) calc();
+}
+
+const sel = document.getElementById("csym");
+SYMS.forEach(s => { const o = document.createElement("option"); o.value = s; o.textContent = s.replace("USDT","") + "/USDT"; sel.appendChild(o); });
+
+loadAll();
+setInterval(loadAll, 120000);
+</script>
+</body>
+  </html>
